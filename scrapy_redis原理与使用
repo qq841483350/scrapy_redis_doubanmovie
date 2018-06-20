@@ -1,0 +1,105 @@
+
+
+在使用Scrapy_redis之前，先来讲一讲它的原理。
+
+在Redis中，有一个数据结果叫做“列表”。这个列表和Python的列表很相似，可以添加数据进去，也可以从里面读取数据或者删除元素。
+
+在下图的例子中，创建一个名字叫做spider的列表，从列表的尾部添加了三个元素：“jikexueyuan”, "kingname" 和 "hello everyone"，然后再从列表的头部一个一个元素的读取并删除。
+
+在Scrapy_redis中，也是使用了这个原理，Scrapy通过
+
+yield scrapy.Request(URL, callback=xxxx)
+
+这一个语句将URL放到Redis的队列中，然后在生成器中的代码被执行的时候再去Redis中取这个URL。如果多个服务器的爬虫都从Redis中读取URL的话，这就是分布式爬虫。
+
+
+ Scrapy_redis的使用
+
+由于Scrapy_redis已经为封装了大部分的流程，所以使用它不会有任何难度。
+1.启动Redis
+
+首先需要把Redis启动起来。使用Mac OS/Linux的同学在终端下面输入以下命令并回车：
+
+redis-server
+
+使用Windows的同学，在CMD中cd进入存放Redis的文件夹，并运行：
+
+redis-server.exe
+
+2.修改爬虫
+
+在前面的课程中，我们爬虫是继承自scrapy.Spider这个父类。这是Scrapy里面最基本的一个爬虫类，只能实现基本的爬虫功能。现在需要把它替换掉，从而实现更高级的功能。
+
+请对比一下下面这段使用了Scrapy_redis的代码与前面read color网站爬虫的代码头部有什么不同：
+
+from scrapy_redis.spiders import RedisSpider
+
+class ReadColorSpider(RedisSpider):
+    name = "readcolorspider"
+    redis_key = 'readcolorspider:start_urls'
+
+可以看出，这里爬虫的父类已经改成了RedisSpider，同时多了一个：
+
+redis_key = 'readcolorspider:start_urls'
+
+这里的redis_key实际上就是一个变量名，之后爬虫爬到的所有URL都会保存到Redis中这个名为“readcolorspider:start_urls”的列表下面，爬虫同时也会从这个列表中读取后续页面的URL。这个变量名可以任意修改。
+
+除了这两点以外，在爬虫部分的其他代码都不需要做修改。
+
+实际上，这样就已经建立了一个分布式爬虫，只不过现在只有一台电脑。
+3.修改设置
+
+现在已经把三轮车换成了挖掘机，但是Scrapy还在按照指挥三轮车的方式指挥挖掘机，所以挖掘机还不能正常工作。因此修改爬虫文件还不行，Scrapy还不能认识这个新的爬虫。现在修改settings.py。
+
+（1）Scheduler
+
+首先是Scheduler的替换，这个东西是Scrapy中的调度员。在settings.py中添加以下代码：
+
+# Enables scheduling storing requests queue in redis.
+SCHEDULER = "scrapy_redis.scheduler.Scheduler"
+
+（2）去重
+
+# Ensure all spiders share same duplicates filter through redis.
+DUPEFILTER_CLASS = "scrapy_redis.dupefilter.RFPDupeFilter"
+
+设置好上面两项以后，爬虫已经可以正常开始工作了。不过还可以多设置一些东西使爬虫更好用。
+
+（3）不清理Redis队列
+
+# Don't cleanup redis queues, allows to pause/resume crawls.
+SCHEDULER_PERSIST = True
+
+如果这一项为True，那么在Redis中的URL不会被Scrapy_redis清理掉，这样的好处是：爬虫停止了再重新启动，它会从上次暂停的地方开始继续爬取。但是它的弊端也很明显，如果有多个爬虫都要从这里读取URL，需要另外写一段代码来防止重复爬取。
+
+如果设置成了False，那么Scrapy_redis每一次读取了URL以后，就会把这个URL给删除。这样的好处是：多个服务器的爬虫不会拿到同一个URL，也就不会重复爬取。但弊端是：爬虫暂停以后再重新启动，它会重新开始爬。
+4.爬虫请求的调度算法
+
+爬虫的请求调度算法，有三种情况可供选择：
+
+    队列
+
+SCHEDULER_QUEUE_CLASS = 'scrapy_redis.queue.SpiderQueue'
+
+如果不配置调度算法，默认就会使用这种方式。它实现了一个先入先出的队列，先放进Redis的请求会优先爬取。
+
+    栈
+
+SCHEDULER_QUEUE_CLASS = 'scrapy_redis.queue.SpiderStack'
+
+这种方式，后放入到Redis的请求会优先爬取。
+
+    优先级队列
+
+SCHEDULER_QUEUE_CLASS = 'scrapy_redis.queue.SpiderPriorityQueue'
+
+这种方式，会根据一个优先级算法来计算哪些请求先爬取，哪些请求后爬取。这个优先级算法比较复杂，会综合考虑请求的深度等各个因素。
+
+【拓展阅读】
+
+Redis信息，如果不配置的话，Scrapy_redis会默认Redis就运行在现在这台电脑上，IP和端口也都是默认的127.0.0.1和6379。如果Redis不在本地的话，就需要将它们写出来：
+
+REDIS_HOST = '127.0.0.1' #修改为Redis的实际IP地址
+REDIS_PORT = 6379 #修改为Redis的实际端口
+
+接下来，我们将要运行一下爬虫，来看看它的运行效果如何。
